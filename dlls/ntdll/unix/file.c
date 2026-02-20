@@ -2098,6 +2098,7 @@ static NTSTATUS fill_file_info( const struct stat *st, ULONG attr, void *ptr,
     case FileIdGlobalTxDirectoryInformation:
         {
             FILE_ID_GLOBAL_TX_DIR_INFORMATION *info = ptr;
+            memset( &info->FileId, 0, sizeof(info->FileId) );
             info->FileId.QuadPart = st->st_ino;
             fill_file_info( st, attr, info, FileDirectoryInformation );
         }
