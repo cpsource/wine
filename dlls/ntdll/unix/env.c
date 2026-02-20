@@ -1151,7 +1151,11 @@ static void add_registry_variables( WCHAR **env, SIZE_T *pos, SIZE_T *size, HAND
         if (datalen && !data[datalen - 1]) datalen--;  /* don't count terminating null if any */
         if (!datalen) continue;
         data[datalen] = 0;
-        if (info->Type == REG_EXPAND_SZ) value = expand_value( *env, *pos, data, datalen );
+        if (info->Type == REG_EXPAND_SZ)
+        {
+            value = expand_value( *env, *pos, data, datalen );
+            if (!value) continue;
+        }
 
         /* PATH is magic */
         if (namelen == 4 && !wcsnicmp( info->Name, pathW, 4 ) && (p = find_env_var( *env, *pos, pathW, 4 )))
@@ -1636,7 +1640,8 @@ static void copy_dos_path_string( WCHAR **src, WCHAR **dst, UNICODE_STRING *str,
                                   UNICODE_STRING *nt_str, UINT len )
 {
     /* copy the original string into nt_str */
-    if (!(nt_str->Buffer = malloc( len + sizeof(WCHAR) ))) return;
+    if (!(nt_str->Buffer = malloc( len + sizeof(WCHAR) )))
+        NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
     memcpy( nt_str->Buffer, *src, len );
     nt_str->Buffer[len / sizeof(WCHAR)] = 0;
     nt_str->Length = len;
@@ -1897,6 +1902,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
     WCHAR *dst, *cmdline, *path, *bootstrap;
     WCHAR *env = get_initial_environment( &env_pos, &env_size );
     WCHAR *curdir = get_initial_directory();
+    if (!env || !curdir) NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
     UNICODE_STRING nt_name;
     NTSTATUS status;
 
@@ -1959,6 +1965,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
     }
 
     main_wargv = build_wargv( get_dos_path( nt_name.Buffer ));
+    if (!main_wargv) NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
     cmdline = build_command_line( main_wargv );
 
     TRACE( "image %s cmdline %s dir %s\n",
@@ -2119,6 +2126,7 @@ void init_startup_info(void)
     }
     rebuild_argv();
     main_wargv = build_wargv( params->ImagePathName.Buffer );
+    if (!main_wargv) NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
     free( nt_name.Buffer );
     init_peb( params, module );
 }
