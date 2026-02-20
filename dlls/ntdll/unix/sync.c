@@ -81,8 +81,8 @@ int inproc_device_fd = -1;
 static const char *debugstr_timeout( const LARGE_INTEGER *timeout )
 {
     if (!timeout) return "(infinite)";
-    return wine_dbg_sprintf( "%lld.%07ld", (long long)(timeout->QuadPart / TICKSPERSEC),
-                             (long)(timeout->QuadPart % TICKSPERSEC) );
+    return wine_dbg_sprintf( "%lld.%07lld", (long long)(timeout->QuadPart / TICKSPERSEC),
+                             (long long)llabs( timeout->QuadPart % TICKSPERSEC ) );
 }
 
 
@@ -412,11 +412,11 @@ static NTSTATUS linux_wait_objs( int device, DWORD count, const int *objs, WAIT_
     else if (timeout->QuadPart <= 0)
     {
         clock_gettime( CLOCK_MONOTONIC, &now );
-        args.timeout = ((ULONGLONG)now.tv_sec * NSECPERSEC) + now.tv_nsec + (-timeout->QuadPart * 100);
+        args.timeout = ((ULONGLONG)now.tv_sec * NSECPERSEC) + now.tv_nsec + ((ULONGLONG)(-timeout->QuadPart) * 100);
     }
     else
     {
-        args.timeout = (timeout->QuadPart * 100) - (SECS_1601_TO_1970 * NSECPERSEC);
+        args.timeout = ((ULONGLONG)timeout->QuadPart * 100) - (SECS_1601_TO_1970 * NSECPERSEC);
         args.flags |= NTSYNC_WAIT_REALTIME;
     }
 
@@ -584,7 +584,8 @@ static struct inproc_sync *cache_inproc_sync( HANDLE handle, struct inproc_sync 
             static const size_t size = INPROC_SYNC_CACHE_BLOCK_SIZE * sizeof(struct inproc_sync);
             void *ptr = anon_mmap_alloc( size, PROT_READ | PROT_WRITE );
             if (ptr == MAP_FAILED) return sync;
-            inproc_sync_cache[entry] = ptr;
+            if (InterlockedCompareExchangePointer( (void **)&inproc_sync_cache[entry], ptr, NULL ))
+                munmap( ptr, size );  /* another thread allocated this block first */
         }
     }
 
@@ -1763,8 +1764,9 @@ static NTSTATUS event_data_to_state_change( const union debug_event_data *data, 
         info->ExceptionRecord.ExceptionFlags   = data->exception.flags;
         info->ExceptionRecord.ExceptionRecord  = wine_server_get_ptr( data->exception.record );
         info->ExceptionRecord.ExceptionAddress = wine_server_get_ptr( data->exception.address );
-        info->ExceptionRecord.NumberParameters = data->exception.nb_params;
-        for (i = 0; i < data->exception.nb_params; i++)
+        info->ExceptionRecord.NumberParameters =
+            min( data->exception.nb_params, EXCEPTION_MAXIMUM_PARAMETERS );
+        for (i = 0; i < info->ExceptionRecord.NumberParameters; i++)
             info->ExceptionRecord.ExceptionInformation[i] = data->exception.params[i];
         return STATUS_SUCCESS;
     }
