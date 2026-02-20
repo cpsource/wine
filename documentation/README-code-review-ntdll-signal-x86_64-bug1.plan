@@ -1,0 +1,152 @@
+# Fix Plan: int_handler async-signal-safety
+# Issue #1 from README-code-review-ntdll-signal-x86_64.md
+
+## Context
+
+`int_handler` (the SIGINT signal handler) directly calls `NtCreateThreadEx` and
+`NtClose` from signal handler context. Neither function is async-signal-safe:
+both may acquire internal locks (heap allocator, wineserver connection, fd
+table). If SIGINT arrives while the interrupted thread holds any of those locks
+the handler deadlocks. This bug exists identically in all four architecture
+signal files.
+
+The fix introduces a pipe-based deferral mechanism: the signal handler writes
+one byte to a pipe (async-signal-safe), and a dedicated background pthread reads
+from that pipe and performs the `NtCreateThreadEx` call safely outside signal
+context.
+
+---
+
+## Files to modify
+
+| File | Change |
+|------|--------|
+| `dlls/ntdll/unix/thread.c` | Add ctrl-event thread infrastructure (pipe + pthread) |
+| `dlls/ntdll/unix/unix_private.h` | Declare the two new shared functions |
+| `dlls/ntdll/unix/signal_x86_64.c` | Call `signal_init_ctrl_thread()` in `signal_init_process`; replace body of `int_handler` |
+| `dlls/ntdll/unix/signal_i386.c` | Same two changes |
+| `dlls/ntdll/unix/signal_arm.c` | Same two changes |
+| `dlls/ntdll/unix/signal_arm64.c` | Same two changes |
+
+---
+
+## Step 1 — `dlls/ntdll/unix/thread.c`
+
+Add at file scope, near other thread infrastructure:
+
+```c
+/* Pipe used to defer Ctrl+C thread creation out of signal-handler context. */
+static int ctrl_c_pipe[2] = { -1, -1 };
+
+static void *ctrl_c_thread( void *arg )
+{
+    unsigned char event;
+    HANDLE handle;
+
+    while (read( ctrl_c_pipe[0], &event, 1 ) == 1)
+    {
+        if (p__wine_ctrl_routine &&
+            !NtCreateThreadEx( &handle, THREAD_ALL_ACCESS, NULL, NtCurrentProcess(),
+                               p__wine_ctrl_routine, (void *)(ULONG_PTR)event,
+                               0, 0, 0, 0, NULL ))
+            NtClose( handle );
+    }
+    return NULL;
+}
+
+void signal_init_ctrl_thread( void )
+{
+    pthread_t tid;
+
+    if (pipe( ctrl_c_pipe ) == -1)
+    {
+        perror( "pipe" );
+        exit( 1 );
+    }
+    fcntl( ctrl_c_pipe[0], F_SETFD, FD_CLOEXEC );
+    fcntl( ctrl_c_pipe[1], F_SETFD, FD_CLOEXEC );
+    pthread_create( &tid, NULL, ctrl_c_thread, NULL );
+    pthread_detach( tid );
+}
+
+void signal_post_ctrl_event( unsigned char event )
+{
+    /* write() is async-signal-safe */
+    while (write( ctrl_c_pipe[1], &event, 1 ) == -1 && errno == EINTR) {}
+}
+```
+
+---
+
+## Step 2 — `dlls/ntdll/unix/unix_private.h`
+
+Add declarations alongside the other shared function declarations:
+
+```c
+extern void signal_init_ctrl_thread( void );
+extern void signal_post_ctrl_event( unsigned char event );
+```
+
+---
+
+## Step 3 — Each architecture's `signal_init_process`
+
+In `signal_x86_64.c`, `signal_i386.c`, `signal_arm.c`, `signal_arm64.c`,
+call `signal_init_ctrl_thread()` near the start of `signal_init_process`,
+before the `sigaction` registrations.
+
+---
+
+## Step 4 — Each architecture's `int_handler`
+
+**Before (identical in all four arch files):**
+```c
+HANDLE handle;
+
+if (p__wine_ctrl_routine)
+{
+    if (!NtCreateThreadEx( &handle, THREAD_ALL_ACCESS, NULL, NtCurrentProcess(),
+                           p__wine_ctrl_routine, 0 /* CTRL_C_EVENT */, 0, 0, 0, 0, NULL ))
+        NtClose( handle );
+}
+```
+
+**After:**
+```c
+signal_post_ctrl_event( 0 /* CTRL_C_EVENT */ );
+```
+
+Remove the now-unused `HANDLE handle` local variable from each `int_handler`.
+
+---
+
+## Rationale for shared implementation
+
+All four arch files contain byte-for-byte identical `int_handler` bodies.
+Placing the pipe and pthread in `thread.c` (which already manages thread
+infrastructure) avoids duplicating the pipe fd, the pthread, and the read loop
+across four files. The two new functions are declared in `unix_private.h` which
+all arch files already include.
+
+---
+
+## Behaviour notes
+
+- Thread creation is deferred by at most a pipe round-trip (microseconds).
+- The Ctrl+C event type (currently always `0 /* CTRL_C_EVENT */`) is preserved
+  through the pipe as the single byte written and passed to `p__wine_ctrl_routine`.
+- If the pipe buffer is full (extremely unlikely at one byte per Ctrl+C) the
+  write blocks briefly; adding `O_NONBLOCK` and a dropped-event warning is a
+  possible future improvement.
+
+---
+
+## Verification
+
+1. Build Wine: `make -j$(nproc)`
+2. Run a Windows console application under Wine and press Ctrl+C — verify it
+   exits cleanly.
+3. With `strace`, confirm `NtCreateThreadEx` is no longer called from signal
+   context (call stack should show `ctrl_c_thread` pthread, not a signal frame).
+4. Stress test: run a tight loop under Wine while sending repeated SIGINT
+   signals (`kill -INT <pid>`) to verify no deadlock.
