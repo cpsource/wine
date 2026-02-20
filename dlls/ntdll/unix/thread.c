@@ -1494,15 +1494,30 @@ void abort_process( int status )
 static DECLSPEC_NORETURN void exit_thread( int status )
 {
     static void *prev_teb;
+    struct ntdll_thread_data *thread_data;
     TEB *teb;
 
     pthread_sigmask( SIG_BLOCK, &server_block_set, NULL );
 
-    if (InterlockedDecrement( &nb_threads ) <= 0) exit_process( status );
+    if (InterlockedDecrement( &nb_threads ) <= 0)
+    {
+        /* Last thread: drain the deferred-free slot before exiting the process,
+         * so the second-to-last thread's TEB is not leaked. */
+        if ((teb = InterlockedExchangePointer( &prev_teb, NULL )))
+        {
+            thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
+            if (thread_data->pthread_id)
+            {
+                pthread_join( thread_data->pthread_id, NULL );
+                virtual_free_teb( teb );
+            }
+        }
+        exit_process( status );
+    }
 
     if ((teb = InterlockedExchangePointer( &prev_teb, NtCurrentTeb() )))
     {
-        struct ntdll_thread_data *thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
+        thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
 
         if (thread_data->pthread_id)
         {
