@@ -1005,7 +1005,7 @@ int wine_server_receive_fd( obj_handle_t *handle )
 
     for (;;)
     {
-        if ((ret = recvmsg( fd_socket, &msghdr, MSG_CMSG_CLOEXEC )) > 0)
+        if ((ret = recvmsg( fd_socket, &msghdr, MSG_CMSG_CLOEXEC )) == (ssize_t)sizeof(*handle))
         {
             struct cmsghdr *cmsg;
             for (cmsg = CMSG_FIRSTHDR( &msghdr ); cmsg; cmsg = CMSG_NXTHDR( &msghdr, cmsg ))
@@ -1306,9 +1306,11 @@ static const char *init_server_dir( dev_t dev, ino_t ino )
     char *dir = NULL;
 
 #ifdef __ANDROID__  /* there's no /tmp dir on Android */
-    asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino );
+    if (asprintf( &dir, "%s/.wineserver/server-%llx-%llx", config_dir, (unsigned long long)dev, (unsigned long long)ino ) == -1)
+        fatal_perror( "asprintf" );
 #else
-    asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino );
+    if (asprintf( &dir, "/tmp/.wine-%u/server-%llx-%llx", getuid(), (unsigned long long)dev, (unsigned long long)ino ) == -1)
+        fatal_perror( "asprintf" );
 #endif
     return dir;
 }
@@ -1459,7 +1461,7 @@ static int server_connect(void)
 #endif
         if (connect( s, (struct sockaddr *)&addr, slen ) != -1)
         {
-            fchdir( initial_cwd );  /* switch back to the starting directory */
+            if (fchdir( initial_cwd ) == -1) fatal_perror( "fchdir" );  /* switch back to the starting directory */
             fcntl( s, F_SETFD, FD_CLOEXEC );
             return s;
         }
