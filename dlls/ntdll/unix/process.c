@@ -90,6 +90,7 @@ static char **build_argv( const UNICODE_STRING *cmdline, int reserved )
 
     argc = reserved + 2 + len / 2;
     argv = malloc( argc * sizeof(*argv) + len );
+    if (!argv) { free( src ); return NULL; }
     arg = dst = (char *)(argv + argc);
     argc = reserved;
     while (*src)
@@ -379,6 +380,7 @@ static void set_stdio_fd( int stdin_fd, int stdout_fd )
     if (stdin_fd == -1 || stdout_fd == -1)
     {
         fd = open( "/dev/null", O_RDWR );
+        if (fd == -1) WARN( "cannot open /dev/null: %s\n", strerror(errno) );
         if (stdin_fd == -1) stdin_fd = fd;
         if (stdout_fd == -1) stdout_fd = fd;
     }
@@ -441,6 +443,7 @@ static NTSTATUS spawn_process( const RTL_USER_PROCESS_PARAMETERS *params, int so
                 close( unixdir );
             }
             argv = build_argv( &params->CommandLine, 2 );
+            if (!argv) _exit(1);
 
             exec_wineloader( argv, socketfd, pe_info );
             _exit(1);
@@ -548,6 +551,7 @@ NTSTATUS wow64_wine_spawnvp( void *args )
 
     while (argv32[count]) count++;
     argv = malloc( (count + 1) * sizeof(*argv) );
+    if (!argv) return STATUS_NO_MEMORY;
     for (i = 0; i < count; i++) argv[i] = ULongToPtr( argv32[i] );
     argv[count] = NULL;
     ret = __wine_unix_spawnvp( argv, params32->wait );
@@ -609,6 +613,7 @@ static NTSTATUS fork_and_exec( OBJECT_ATTRIBUTES *attr, const char *unix_name, i
             signal( SIGPIPE, SIG_DFL );
 
             argv = build_argv( &params->CommandLine, 0 );
+            if (!argv) _exit(1);
             if (unixdir != -1)
             {
                 fchdir( unixdir );
@@ -810,7 +815,8 @@ NTSTATUS WINAPI NtCreateUserProcess( HANDLE *process_handle_ptr, HANDLE *thread_
     else
     {
         int enable = 1;
-        setsockopt( socketfd[0], SOL_SOCKET, SO_PASSCRED, &enable, sizeof(enable) );
+        if (setsockopt( socketfd[0], SOL_SOCKET, SO_PASSCRED, &enable, sizeof(enable) ) == -1)
+            WARN( "setsockopt SO_PASSCRED failed: %s\n", strerror(errno) );
     }
 #endif
 
