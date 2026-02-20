@@ -1503,7 +1503,7 @@ static NTSTATUS CDROM_RawRead(int fd, const RAW_READ_INFO* raw, void* buffer, DW
     {
         DWORD lba = raw->DiskOffset.QuadPart >> 11;
         struct cdrom_msf*       msf;
-        PBYTE                   *bp; /* current buffer pointer */
+        PBYTE                    bp; /* current buffer pointer */
         DWORD i;
 
         if ((lba + raw->SectorCount) >
