@@ -849,6 +849,8 @@ NTSTATUS WINAPI NtQueryLicenseValue( const UNICODE_STRING *name, ULONG *type,
 
     if (!name || !name->Buffer || !name->Length || !retlen) return STATUS_INVALID_PARAMETER;
 
+    if (length > ULONG_MAX - FIELD_OFFSET( KEY_VALUE_PARTIAL_INFORMATION, Data ))
+        return STATUS_INVALID_PARAMETER;
     info_length = FIELD_OFFSET( KEY_VALUE_PARTIAL_INFORMATION, Data ) + length;
     if (!(info = malloc( info_length ))) return STATUS_NO_MEMORY;
 
