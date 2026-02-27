@@ -548,7 +548,7 @@ static int wow64_translate_control( const WSABUF *control64, struct afd_wsabuf_3
         cmsg32->cmsg_len = cmsg64->cmsg_len - sizeof(*cmsg64) + sizeof(*cmsg32);
         cmsg32->cmsg_level = cmsg64->cmsg_level;
         cmsg32->cmsg_type = cmsg64->cmsg_type;
-        memcpy( cmsg32 + 1, cmsg64 + 1, cmsg64->cmsg_len );
+        memcpy( cmsg32 + 1, cmsg64 + 1, cmsg64->cmsg_len - sizeof(*cmsg64) );
 
         ptr64 += WSA_CMSG_ALIGN( cmsg64->cmsg_len );
         ptr32 += cmsg_align_32( cmsg32->cmsg_len );
@@ -1064,8 +1064,11 @@ static NTSTATUS try_send( int fd, struct async_send_ioctl *async )
         {
             /* Sending to port 0 succeeds on Windows. Use 'discard' service instead so sendmsg() works on Unix
              * while still goes through other parameters validation. */
-            WARN( "Trying to use destination port 0, substituing 9.\n" );
-            unix_addr.in.sin_port = htons( 9 );
+            WARN( "Trying to use destination port 0, substituting 9.\n" );
+            if (unix_addr.addr.sa_family == AF_INET6)
+                unix_addr.in6.sin6_port = htons( 9 );
+            else
+                unix_addr.in.sin_port = htons( 9 );
         }
 
 #if defined(HAS_IPX) && defined(SOL_IPX)
@@ -2394,7 +2397,7 @@ NTSTATUS sock_ioctl( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc
         {
             int value = *(DWORD *)in_buffer ? IPV6_PMTUDISC_DO : IPV6_PMTUDISC_DONT;
 
-            return do_setsockopt( handle, io, IPPROTO_IP, IPV6_MTU_DISCOVER, &value, sizeof(value) );
+            return do_setsockopt( handle, io, IPPROTO_IPV6, IPV6_MTU_DISCOVER, &value, sizeof(value) );
         }
 #else
         {

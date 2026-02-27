@@ -1575,10 +1575,21 @@ static void init_logical_proc_info(void)
     }
     else
     {
-        logical_proc_info = realloc( logical_proc_info, logical_proc_info_len * sizeof(*logical_proc_info) );
-        logical_proc_info_alloc_len = logical_proc_info_len;
-        logical_proc_info_ex = realloc( logical_proc_info_ex, logical_proc_info_ex_size );
-        logical_proc_info_ex_alloc_size = logical_proc_info_ex_size;
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION *tmp_info;
+        SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *tmp_info_ex;
+
+        tmp_info = realloc( logical_proc_info, logical_proc_info_len * sizeof(*logical_proc_info) );
+        if (tmp_info)
+        {
+            logical_proc_info = tmp_info;
+            logical_proc_info_alloc_len = logical_proc_info_len;
+        }
+        tmp_info_ex = realloc( logical_proc_info_ex, logical_proc_info_ex_size );
+        if (tmp_info_ex)
+        {
+            logical_proc_info_ex = tmp_info_ex;
+            logical_proc_info_ex_alloc_size = logical_proc_info_ex_size;
+        }
     }
     init_tsc_frequency();
 }
@@ -3791,7 +3802,7 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
 
         if (ret) return ret;
 
-        buffer = malloc( str->MaximumLength );
+        if (!(buffer = malloc( str->MaximumLength ))) return STATUS_NO_MEMORY;
         SERVER_START_REQ( get_process_image_name )
         {
             req->pid = id->ProcessId;

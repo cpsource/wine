@@ -948,11 +948,13 @@ NTSTATUS WINAPI NtSetContextThread( HANDLE handle, const CONTEXT *context )
     if ((flags & CONTEXT_XSTATE) && xstate_extended_features)
     {
         CONTEXT_EX *context_ex = (CONTEXT_EX *)(context + 1);
-        XSAVE_AREA_HEADER *xs = (XSAVE_AREA_HEADER *)((char *)context_ex + context_ex->XState.Offset);
+        XSAVE_AREA_HEADER *xs;
 
-        if (context_ex->XState.Length < sizeof(XSAVE_AREA_HEADER) ||
+        if (context_ex->XState.Offset < (LONG)sizeof(CONTEXT_EX) ||
+            context_ex->XState.Length < sizeof(XSAVE_AREA_HEADER) ||
             context_ex->XState.Length > xstate_size)
             return STATUS_INVALID_PARAMETER;
+        xs = (XSAVE_AREA_HEADER *)((char *)context_ex + context_ex->XState.Offset);
         if ((xs->Mask & xstate_extended_features)
             && (context_ex->XState.Length < xstate_get_size( xs->CompactionMask, xs->Mask )))
             return STATUS_BUFFER_OVERFLOW;
@@ -1030,7 +1032,11 @@ NTSTATUS WINAPI NtSetContextThread( HANDLE handle, const CONTEXT *context )
     if (flags & CONTEXT_XSTATE)
     {
         CONTEXT_EX *context_ex = (CONTEXT_EX *)(context + 1);
-        XSAVE_AREA_HEADER *xs = (XSAVE_AREA_HEADER *)((char *)context_ex + context_ex->XState.Offset);
+        XSAVE_AREA_HEADER *xs;
+
+        if (context_ex->XState.Offset < (LONG)sizeof(CONTEXT_EX))
+            return STATUS_INVALID_PARAMETER;
+        xs = (XSAVE_AREA_HEADER *)((char *)context_ex + context_ex->XState.Offset);
         UINT64 mask = frame->xstate.Mask;
 
         if (user_shared_data->XState.CompactionEnabled)
@@ -1151,12 +1157,14 @@ NTSTATUS WINAPI NtGetContextThread( HANDLE handle, CONTEXT *context )
         if ((needed_flags & CONTEXT_XSTATE) && xstate_extended_features)
         {
             CONTEXT_EX *context_ex = (CONTEXT_EX *)(context + 1);
-            XSAVE_AREA_HEADER *xstate = (XSAVE_AREA_HEADER *)((char *)context_ex + context_ex->XState.Offset);
+            XSAVE_AREA_HEADER *xstate;
             UINT64 mask;
 
-            if (context_ex->XState.Length < sizeof(XSAVE_AREA_HEADER) ||
+            if (context_ex->XState.Offset < (LONG)sizeof(CONTEXT_EX) ||
+                context_ex->XState.Length < sizeof(XSAVE_AREA_HEADER) ||
                 context_ex->XState.Length > xstate_size)
                 return STATUS_INVALID_PARAMETER;
+            xstate = (XSAVE_AREA_HEADER *)((char *)context_ex + context_ex->XState.Offset);
 
             if (user_shared_data->XState.CompactionEnabled)
             {
@@ -1749,11 +1757,16 @@ __ASM_GLOBAL_FUNC( user_mode_abort_thread,
 NTSTATUS KeUserModeCallback( ULONG id, const void *args, ULONG len, void **ret_ptr, ULONG *ret_len )
 {
     struct syscall_frame *frame = get_syscall_frame();
-    ULONG esp = (frame->esp - offsetof(struct callback_stack_layout, args_data[len])) & ~3;
-    struct callback_stack_layout *stack = (struct callback_stack_layout *)esp;
+    size_t layout_size = offsetof(struct callback_stack_layout, args_data[len]);
+    ULONG esp;
+    struct callback_stack_layout *stack;
 
     if ((char *)ntdll_get_thread_data()->kernel_stack + min_kernel_stack > (char *)&frame)
         return STATUS_STACK_OVERFLOW;
+    if (layout_size > frame->esp)
+        return STATUS_STACK_OVERFLOW;
+    esp = (frame->esp - layout_size) & ~3;
+    stack = (struct callback_stack_layout *)esp;
 
     stack->eip  = frame->eip;
     stack->id   = id;

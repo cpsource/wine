@@ -23,6 +23,7 @@
 #pragma makedep unix
 #endif
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,7 +67,7 @@ NTSTATUS WINAPI NtCreateToken( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIB
     *handle = 0;
     if ((status = alloc_object_attributes( attr, &objattr, &objattr_size ))) return status;
 
-    if (attr->SecurityQualityOfService)
+    if (attr && attr->SecurityQualityOfService)
     {
         SECURITY_QUALITY_OF_SERVICE *qos = attr->SecurityQualityOfService;
         TRACE( "ObjectAttributes->SecurityQualityOfService = {%d, %d, %d, %s}\n",
@@ -75,6 +76,11 @@ NTSTATUS WINAPI NtCreateToken( HANDLE *handle, ACCESS_MASK access, OBJECT_ATTRIB
         level = qos->ImpersonationLevel;
     }
 
+    if (groups->GroupCount > UINT_MAX / sizeof( attrs[0] ))
+    {
+        free( objattr );
+        return STATUS_INVALID_PARAMETER;
+    }
     groups_size = groups->GroupCount * sizeof( attrs[0] );
 
     for (i = 0; i < groups->GroupCount; i++)
@@ -839,7 +845,8 @@ NTSTATUS WINAPI NtFilterToken( HANDLE token, ULONG flags, TOKEN_GROUPS *disable_
         req->handle          = wine_server_obj_handle( token );
         req->flags           = flags;
         req->privileges_size = privileges_len;
-        wine_server_add_data( req, privileges->Privileges, privileges_len );
+        if (privileges)
+            wine_server_add_data( req, privileges->Privileges, privileges_len );
         wine_server_add_data( req, sids, sids_len );
         status = wine_server_call( req );
         if (!status) *new_token = wine_server_ptr_handle( reply->new_handle );
@@ -899,12 +906,18 @@ NTSTATUS WINAPI NtAccessCheck( PSECURITY_DESCRIPTOR descr, HANDLE token, ACCESS_
     TRACE( "(%p, %p, %08x, %p, %p, %p, %p, %p)\n",
            descr, token, access, mapping, privs, retlen, access_granted, access_status );
 
-    if (!privs || !retlen) return STATUS_ACCESS_VIOLATION;
+    if (!privs || !retlen || !mapping) return STATUS_ACCESS_VIOLATION;
     priv_len = *retlen;
 
     /* reuse the object attribute SD marshalling */
     InitializeObjectAttributes( &attr, NULL, 0, 0, descr );
     if ((status = alloc_object_attributes( &attr, &objattr, &len ))) return status;
+
+    if (priv_len < offsetof( PRIVILEGE_SET, Privilege ))
+    {
+        free( objattr );
+        return STATUS_BUFFER_TOO_SMALL;
+    }
 
     SERVER_START_REQ( access_check )
     {

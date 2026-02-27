@@ -189,6 +189,7 @@ static char *remove_tail( const char *str, const char *tail )
     if (len < tail_len) return NULL;
     if (strcmp( str + len - tail_len, tail )) return NULL;
     ret = malloc( len - tail_len + 1 );
+    if (!ret) return NULL;
     memcpy( ret, str, len - tail_len );
     ret[len - tail_len] = 0;
     return ret;
@@ -200,6 +201,7 @@ static char *build_path( const char *dir, const char *name )
     size_t len = strlen( dir );
     char *ret = malloc( len + strlen( name ) + 2 );
 
+    if (!ret) fatal_error( "malloc\n" );
     if (len)
     {
         memcpy( ret, dir, len );
@@ -237,7 +239,8 @@ static char *build_relative_path( const char *base, const char *from, const char
         break;
     }
 
-    ret = malloc( strlen(base) + 3 * dotdots + strlen(start) + 2 );
+    ret = malloc( strlen(base) + (size_t)3 * dotdots + strlen(start) + 2 );
+    if (!ret) return NULL;
     strcpy( ret, base );
     while (dotdots--) strcat( ret, "/.." );
 
@@ -303,6 +306,7 @@ static void set_dll_path(void)
     if (path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
 
     dll_paths = malloc( (count + 2) * sizeof(*dll_paths) );
+    if (!dll_paths) fatal_error( "malloc\n" );
     count = 0;
 
     if (!build_dir) dll_paths[count++] = dll_dir;
@@ -310,7 +314,13 @@ static void set_dll_path(void)
     if (path)
     {
         path = strdup(path);
-        for (p = strtok( path, ":" ); p; p = strtok( NULL, ":" )) dll_paths[count++] = strdup( p );
+        if (!path) fatal_error( "strdup\n" );
+        for (p = strtok( path, ":" ); p; p = strtok( NULL, ":" ))
+        {
+            dll_paths[count] = strdup( p );
+            if (!dll_paths[count]) fatal_error( "strdup\n" );
+            count++;
+        }
         free( path );
     }
 
@@ -327,13 +337,19 @@ static void set_system_dll_path(void)
     if (path && *path) for (p = path, count = 1; *p; p++) if (*p == ':') count++;
 
     system_dll_paths = malloc( (count + 1) * sizeof(*system_dll_paths) );
+    if (!system_dll_paths) fatal_error( "malloc\n" );
     count = 0;
 
     if (path && *path)
     {
         char *path_copy = strdup(path);
+        if (!path_copy) fatal_error( "strdup\n" );
         for (p = strtok( path_copy, ":" ); p; p = strtok( NULL, ":" ))
-            system_dll_paths[count++] = strdup( p );
+        {
+            system_dll_paths[count] = strdup( p );
+            if (!system_dll_paths[count]) fatal_error( "strdup\n" );
+            count++;
+        }
         free( path_copy );
     }
     system_dll_paths[count] = NULL;
@@ -1490,6 +1506,7 @@ NTSTATUS load_start_exe( UNICODE_STRING *nt_name, void **module )
     SIZE_T size;
     WCHAR *image = malloc( sizeof("\\??\\C:\\windows\\system32\\start.exe") * sizeof(WCHAR) );
 
+    if (!image) fatal_error( "malloc\n" );
     wcscpy( image, get_machine_wow64_dir( current_machine ));
     wcscat( image, startW );
     init_unicode_string( nt_name, image );
@@ -1704,15 +1721,18 @@ static void load_ntdll(void)
     init_unicode_string( &str, path );
     InitializeObjectAttributes( &attr, &str, 0, 0, NULL );
 
-    if (build_dir) asprintf( &name, "%s%s/ntdll.dll", ntdll_dir, pe_dir );
-    else asprintf( &name, "%s%s/ntdll.dll", dll_dir, pe_dir );
+    if (build_dir) {
+        if (asprintf( &name, "%s%s/ntdll.dll", ntdll_dir, pe_dir ) == -1) fatal_error( "asprintf\n" );
+    } else {
+        if (asprintf( &name, "%s%s/ntdll.dll", dll_dir, pe_dir ) == -1) fatal_error( "asprintf\n" );
+    }
 
     if (is_arm64ec()) machine = main_image_info.Machine;
     status = open_builtin_pe_file( name, &attr, &module, &size, &info, 0, 0, machine, FALSE, 0 );
     if (status == STATUS_DLL_NOT_FOUND)
     {
         free( name );
-        asprintf( &name, "%s/ntdll.dll%c.so", ntdll_dir, 0 );
+        if (asprintf( &name, "%s/ntdll.dll%c.so", ntdll_dir, 0 ) == -1) fatal_error( "asprintf\n" );
         status = open_builtin_so_file( name, &attr, &module, &info, machine, 0, FALSE );
     }
     if (status == STATUS_IMAGE_NOT_AT_BASE) status = virtual_relocate_module( module );
@@ -1811,6 +1831,7 @@ static void load_wow64_ntdll( USHORT machine )
     if (!(wow64_dir = get_machine_wow64_dir( machine ))) return;
 
     path = malloc( sizeof("\\??\\C:\\windows\\system32\\ntdll.dll") * sizeof(WCHAR) );
+    if (!path) fatal_error( "malloc\n" );
     wcscpy( path, wow64_dir );
     wcscat( path, ntdllW );
     init_unicode_string( &nt_name, path );
@@ -2107,10 +2128,17 @@ static int pre_exec(void)
 {
     if (build_dir)
     {
-        char *path = getenv( "DYLD_LIBRARY_PATH" );
-        if (path) asprintf( &path, "%s/dlls/ntdll:%s/dlls/win32u:%s", build_dir, build_dir, path );
-        else asprintf( &path, "%s/dlls/ntdll:%s/dlls/win32u", build_dir, build_dir );
-        setenv( "DYLD_LIBRARY_PATH", path, 1 );
+        char *old_path = getenv( "DYLD_LIBRARY_PATH" );
+        char *new_path;
+        if (old_path) {
+            if (asprintf( &new_path, "%s/dlls/ntdll:%s/dlls/win32u:%s", build_dir, build_dir, old_path ) == -1)
+                fatal_error( "asprintf\n" );
+        } else {
+            if (asprintf( &new_path, "%s/dlls/ntdll:%s/dlls/win32u", build_dir, build_dir ) == -1)
+                fatal_error( "asprintf\n" );
+        }
+        setenv( "DYLD_LIBRARY_PATH", new_path, 1 );
+        free( new_path );
         return 1;
     }
 #ifdef HAVE_WINE_PRELOADER
@@ -2145,12 +2173,14 @@ static void reexec_loader( int argc, char *argv[], char *extra_arg )
     if (extra_arg)
     {
         new_argv = malloc( (argc + 3) * sizeof(*argv) );
+        if (!new_argv) fatal_error( "malloc\n" );
         memcpy( new_argv + 3, argv + 1, argc * sizeof(*argv) );
         new_argv[2] = extra_arg;
     }
     else
     {
         new_argv = malloc( (argc + 2) * sizeof(*argv) );
+        if (!new_argv) fatal_error( "malloc\n" );
         memcpy( new_argv + 2, argv + 1, argc * sizeof(*argv) );
     }
 
@@ -2180,11 +2210,12 @@ static void check_command_line( int argc, char *argv[] )
     if (strcmp( basename, "wine" )) /* check if there's a builtin exe corresponding to the base name */
     {
         const char *pe_dir = get_pe_dir( current_machine );
-        char *exe;
+        char *exe = NULL;
 
         if (build_dir)
         {
-            asprintf( &exe, "%s/programs/%s%s/%s.exe", build_dir, basename, pe_dir, basename );
+            if (asprintf( &exe, "%s/programs/%s%s/%s.exe", build_dir, basename, pe_dir, basename ) == -1)
+                fatal_error( "asprintf\n" );
             if (!access( exe, R_OK )) reexec_loader( argc, argv, basename );
             free( exe );
         }
@@ -2192,9 +2223,11 @@ static void check_command_line( int argc, char *argv[] )
         {
             for (int i = 0; dll_paths[i]; i++)
             {
-                asprintf( &exe, "%s%s/%s.exe", dll_paths[i], pe_dir, basename );
+                if (asprintf( &exe, "%s%s/%s.exe", dll_paths[i], pe_dir, basename ) == -1)
+                    fatal_error( "asprintf\n" );
                 if (!access( exe, R_OK )) reexec_loader( argc, argv, basename );
                 free( exe );
+                exe = NULL;
             }
         }
     }

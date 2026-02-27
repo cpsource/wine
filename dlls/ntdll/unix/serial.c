@@ -1135,7 +1135,7 @@ static NTSTATUS wait_on( HANDLE handle, int fd, HANDLE event, PIO_APC_ROUTINE ap
 
     commio->events = out_buffer;
     commio->pending_write = 0;
-    status = get_wait_mask( handle, &commio->evtmask, (commio->evtmask & EV_TXEMPTY) ? &commio->pending_write : NULL );
+    status = get_wait_mask( handle, &commio->evtmask, &commio->pending_write );
     if (status)
     {
         free( commio );

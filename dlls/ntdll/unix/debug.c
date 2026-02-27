@@ -116,8 +116,11 @@ static void add_option( const char *name, unsigned char set, unsigned char clear
     }
     if (nb_debug_options >= options_size)
     {
+        struct __wine_debug_channel *tmp;
         options_size = max( options_size * 2, 16 );
-        debug_options = realloc( debug_options, options_size * sizeof(debug_options[0]) );
+        tmp = realloc( debug_options, options_size * sizeof(debug_options[0]) );
+        if (!tmp) return;
+        debug_options = tmp;
     }
 
     pos = min;

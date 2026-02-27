@@ -177,8 +177,11 @@ static void add_load_order( const struct module_loadorder *lo )
     if (i >= env_list.alloc)
     {
         /* No space in current array, make it larger */
+        struct module_loadorder *tmp;
         env_list.alloc += LOADORDER_ALLOC_CLUSTER;
-        env_list.order = realloc( env_list.order, env_list.alloc * sizeof(*lo) );
+        tmp = realloc( env_list.order, env_list.alloc * sizeof(*lo) );
+        if (!tmp) return;
+        env_list.order = tmp;
     }
     env_list.order[i].loadorder  = lo->loadorder;
     env_list.order[i].modulename = lo->modulename;
@@ -231,6 +234,7 @@ static void init_load_order(void)
 
     if (!overrides) return;
     order = entry = malloc( (strlen(overrides) + 1) * sizeof(WCHAR) );
+    if (!order) return;
     ntdll_umbstowcs( overrides, strlen(overrides) + 1, order, strlen(overrides) + 1 );
     while (*entry)
     {
@@ -286,6 +290,7 @@ static HANDLE open_app_key( const WCHAR *app_name )
         ULONG len = wcslen( app_name ) + ARRAY_SIZE(dlloverridesW);
         nameW.Length = (len - 1) * sizeof(WCHAR);
         nameW.Buffer = malloc( len * sizeof(WCHAR) );
+        if (!nameW.Buffer) { NtClose( root ); return 0; }
         wcscpy( nameW.Buffer, app_name );
         wcscat( nameW.Buffer, dlloverridesW );
         InitializeObjectAttributes( &attr, &nameW, 0, root, NULL );

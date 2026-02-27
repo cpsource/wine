@@ -548,7 +548,7 @@ static void prepend_argv( const char **args, int count )
     for (i = 0; i < count; i++) total += strlen(args[i]) + 1;
     for (i = 1; i < main_argc; i++) total += strlen(main_argv[i]) + 1;
 
-    new_argv = malloc( (new_argc + 1) * sizeof(*new_argv) + total );
+    if (!(new_argv = malloc( (new_argc + 1) * sizeof(*new_argv) + total ))) return;
     p = (char *)(new_argv + new_argc + 1);
     for (i = 0; i < count; i++)
     {
@@ -613,7 +613,7 @@ static WCHAR **build_wargv( const WCHAR *image )
 
     for (argc = 1; main_argv[argc]; argc++) total += strlen(main_argv[argc]) + 1;
 
-    wargv = malloc( total * sizeof(WCHAR) + (argc + 1) * sizeof(*wargv) );
+    if (!(wargv = malloc( total * sizeof(WCHAR) + (argc + 1) * sizeof(*wargv) ))) return NULL;
     p = (WCHAR *)(wargv + argc + 1);
     wargv[0] = p;
     wcscpy( p, image );
@@ -875,7 +875,7 @@ static WCHAR *get_initial_environment( SIZE_T *pos, SIZE_T *size )
     *size = 1;
     for (e = environ; *e; e++) *size += strlen(*e) + 6;
 
-    env = malloc( *size * sizeof(WCHAR) );
+    if (!(env = malloc( *size * sizeof(WCHAR) ))) return NULL;
     ptr = env;
     end = env + *size - 1;
     for (e = environ; *e && ptr < end; e++)
@@ -951,8 +951,10 @@ static void set_env_var( WCHAR **env, SIZE_T *pos, SIZE_T *size,
     len = wcslen( value );
     if (*pos + namelen + len + 3 > *size)
     {
+        WCHAR *tmp;
         *size = max( *size * 2, *pos + namelen + len + 3 );
-        *env = realloc( *env, *size * sizeof(WCHAR) );
+        if (!(tmp = realloc( *env, *size * sizeof(WCHAR) ))) return;
+        *env = tmp;
     }
     memcpy( *env + *pos, name, namelen * sizeof(WCHAR) );
     (*env)[*pos + namelen] = '=';
@@ -974,6 +976,7 @@ static void append_envA( WCHAR **env, SIZE_T *pos, SIZE_T *size, const char *nam
     {
         SIZE_T len = strlen(value) + 1;
         WCHAR *valueW = malloc( len * sizeof(WCHAR) );
+        if (!valueW) return;
         ntdll_umbstowcs( value, len, valueW, len );
         append_envW( env, pos, size, name, valueW );
         free( valueW );
@@ -1005,7 +1008,9 @@ static void add_system_dll_path_var( WCHAR **env, SIZE_T *pos, SIZE_T *size )
         if (!unix_to_nt_file_name( system_dll_paths[i], &nt_name, FILE_OPEN ))
         {
             size_t len = wcslen( nt_name );
-            path = realloc( path, (path_len + len + 1) * sizeof(WCHAR) );
+            WCHAR *tmp = realloc( path, (path_len + len + 1) * sizeof(WCHAR) );
+            if (!tmp) { free( nt_name ); free( path ); return; }
+            path = tmp;
             memcpy( path + path_len, nt_name, len * sizeof(WCHAR) );
             path[path_len + len] = ';';
             path_len += len + 1;
@@ -1066,7 +1071,7 @@ static WCHAR *expand_value( WCHAR *env, SIZE_T size, const WCHAR *src, SIZE_T sr
     const WCHAR *var;
     WCHAR *ret;
 
-    ret = malloc( retlen * sizeof(WCHAR) );
+    if (!(ret = malloc( retlen * sizeof(WCHAR) ))) return NULL;
     while (src_len)
     {
         if (*src != '%')
@@ -1106,7 +1111,9 @@ static WCHAR *expand_value( WCHAR *env, SIZE_T size, const WCHAR *src, SIZE_T sr
         if (len >= retlen - count)
         {
             retlen = max( retlen * 2, count + len + 1 );
-            ret = realloc( ret, retlen * sizeof(WCHAR) );
+            WCHAR *tmp = realloc( ret, retlen * sizeof(WCHAR) );
+            if (!tmp) { free( ret ); return NULL; }
+            ret = tmp;
         }
         memcpy( ret + count, var, len * sizeof(WCHAR) );
         count += len;
@@ -1144,13 +1151,18 @@ static void add_registry_variables( WCHAR **env, SIZE_T *pos, SIZE_T *size, HAND
         if (datalen && !data[datalen - 1]) datalen--;  /* don't count terminating null if any */
         if (!datalen) continue;
         data[datalen] = 0;
-        if (info->Type == REG_EXPAND_SZ) value = expand_value( *env, *pos, data, datalen );
+        if (info->Type == REG_EXPAND_SZ)
+        {
+            value = expand_value( *env, *pos, data, datalen );
+            if (!value) continue;
+        }
 
         /* PATH is magic */
         if (namelen == 4 && !wcsnicmp( info->Name, pathW, 4 ) && (p = find_env_var( *env, *pos, pathW, 4 )))
         {
             static const WCHAR sepW[] = {';',0};
             WCHAR *newpath = malloc( (wcslen(p) - 3 + wcslen(value)) * sizeof(WCHAR) );
+            if (!newpath) { if (value != data) free( value ); continue; }
             wcscpy( newpath, p + 5 );
             wcscat( newpath, sepW );
             wcscat( newpath, value );
@@ -1186,7 +1198,7 @@ static WCHAR *get_registry_value( WCHAR *env, SIZE_T pos, HKEY key, const WCHAR 
     }
     else
     {
-        ret = malloc( len + sizeof(WCHAR) );
+        if (!(ret = malloc( len + sizeof(WCHAR) ))) return NULL;
         memcpy( ret, info->Data, len );
         ret[len / sizeof(WCHAR)] = 0;
     }
@@ -1428,6 +1440,7 @@ static WCHAR *get_initial_directory(void)
             {
                 /* add trailing backslash */
                 WCHAR *tmp = malloc( (len + 2) * sizeof(WCHAR) );
+                if (!tmp) { free( cwd ); return ret; }
                 wcscpy( tmp, ret );
                 wcscat( tmp, backslashW );
                 free( ret );
@@ -1441,7 +1454,7 @@ static WCHAR *get_initial_directory(void)
     /* still not initialized */
     MESSAGE("Warning: could not find DOS drive for current working directory '%s', "
             "starting in the Windows directory.\n", cwd ? cwd : "" );
-    ret = malloc( sizeof(windows_dir) );
+    if (!(ret = malloc( sizeof(windows_dir) ))) { free( cwd ); return NULL; }
     wcscpy( ret, windows_dir );
     free( cwd );
     return ret;
@@ -1627,7 +1640,8 @@ static void copy_dos_path_string( WCHAR **src, WCHAR **dst, UNICODE_STRING *str,
                                   UNICODE_STRING *nt_str, UINT len )
 {
     /* copy the original string into nt_str */
-    nt_str->Buffer = malloc( len + sizeof(WCHAR) );
+    if (!(nt_str->Buffer = malloc( len + sizeof(WCHAR) )))
+        NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
     memcpy( nt_str->Buffer, *src, len );
     nt_str->Buffer[len / sizeof(WCHAR)] = 0;
     nt_str->Length = len;
@@ -1888,6 +1902,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
     WCHAR *dst, *cmdline, *path, *bootstrap;
     WCHAR *env = get_initial_environment( &env_pos, &env_size );
     WCHAR *curdir = get_initial_directory();
+    if (!env || !curdir) NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
     UNICODE_STRING nt_name;
     NTSTATUS status;
 
@@ -1950,6 +1965,7 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
     }
 
     main_wargv = build_wargv( get_dos_path( nt_name.Buffer ));
+    if (!main_wargv) NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
     cmdline = build_command_line( main_wargv );
 
     TRACE( "image %s cmdline %s dir %s\n",
@@ -2110,6 +2126,7 @@ void init_startup_info(void)
     }
     rebuild_argv();
     main_wargv = build_wargv( params->ImagePathName.Buffer );
+    if (!main_wargv) NtTerminateProcess( GetCurrentProcess(), STATUS_NO_MEMORY );
     free( nt_name.Buffer );
     init_peb( params, module );
 }
